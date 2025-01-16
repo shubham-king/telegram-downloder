@@ -1,10 +1,10 @@
 {
   "name": "youtube-downloader-bot",
   "version": "1.0.0",
-  "description": "A YouTube downloader bot",
+  "description": "A YouTube video and music downloader Telegram bot",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node --trace-warnings bot.js"
   },
   "dependencies": {
     "dotenv": "^16.0.3",
