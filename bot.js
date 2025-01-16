@@ -2,100 +2,68 @@ require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const ytdl = require('ytdl-core');
 const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('ffmpeg-static');
 const fs = require('fs');
 const path = require('path');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-ffmpeg.setFfmpegPath(ffmpegPath);
+const FORCE_CHANNEL = process.env.FORCE_CHANNEL;
 
-const tempDir = path.join(__dirname, 'temp');
-if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
+const isValidYouTubeURL = (url) => {
+  const regex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+$/;
+  return regex.test(url);
+};
 
-// Replace this with your channel username
-const REQUIRED_CHANNEL = '@techrove';
+// Middleware for force subscription
+bot.use(async (ctx, next) => {
+  if (!ctx.message || !ctx.message.chat) return next();
 
-bot.start(async (ctx) => {
-    const userId = ctx.from.id;
+  const user = ctx.message.from.id;
+  const chatMember = await ctx.telegram.getChatMember(`@${FORCE_CHANNEL}`, user);
 
-    try {
-        const member = await bot.telegram.getChatMember(REQUIRED_CHANNEL, userId);
+  if (chatMember.status === 'left') {
+    return ctx.reply(`You need to join our channel first: https://t.me/${FORCE_CHANNEL}`);
+  }
 
-        if (['creator', 'administrator', 'member'].includes(member.status)) {
-            ctx.reply('Welcome! Send me a YouTube link to download videos or audio.');
-        } else {
-            ctx.reply(
-                `You must join our channel [${REQUIRED_CHANNEL}](https://t.me/techrove) to use this bot.`,
-                { parse_mode: 'Markdown' }
-            );
-        }
-    } catch (error) {
-        ctx.reply(
-            `You must join our channel [${REQUIRED_CHANNEL}](https://t.me/techrove) to use this bot.`,
-            { parse_mode: 'Markdown' }
-        );
-    }
+  return next();
 });
 
+bot.start((ctx) => ctx.reply('Welcome! Send me a YouTube URL to download the video or audio.'));
+
 bot.on('text', async (ctx) => {
-    const userId = ctx.from.id;
+  const videoUrl = ctx.message.text;
 
-    try {
-        const member = await bot.telegram.getChatMember(REQUIRED_CHANNEL, userId);
+  if (!isValidYouTubeURL(videoUrl)) {
+    return ctx.reply('Invalid YouTube URL. Please provide a valid link.');
+  }
 
-        if (!['creator', 'administrator', 'member'].includes(member.status)) {
-            return ctx.reply(
-                `You must join our channel [${REQUIRED_CHANNEL}](https://t.me/techrove) to use this bot.`,
-                { parse_mode: 'Markdown' }
-            );
-        }
-    } catch (error) {
-        return ctx.reply(
-            `You must join our channel [${REQUIRED_CHANNEL}](https://t.me/techrove) to use this bot.`,
-            { parse_mode: 'Markdown' }
-        );
-    }
-
-    const url = ctx.message.text;
-
-    if (!ytdl.validateURL(url)) {
-        return ctx.reply('Invalid YouTube URL. Please send a valid link.');
-    }
-
-    const info = await ytdl.getInfo(url);
+  try {
+    const info = await ytdl.getInfo(videoUrl);
     const formats = ytdl.filterFormats(info.formats, 'audioandvideo');
-    const formatOptions = formats.map((format, index) => `${index + 1}. ${format.qualityLabel} - ${format.container}`).join('\n');
+    const videoTitle = info.videoDetails.title.replace(/[^\w\s]/gi, '');
 
-    ctx.session = { url, formats };
-    ctx.reply(`Available formats:\n${formatOptions}\n\nReply with the number to select.`);
-});
+    // Provide format options to user
+    ctx.reply(`Downloading "${videoTitle}". Please wait...`);
 
-bot.on('text', async (ctx) => {
-    const selection = parseInt(ctx.message.text, 10) - 1;
-    const format = ctx.session?.formats?.[selection];
+    const outputPath = path.resolve(__dirname, `${videoTitle}.mp4`);
+    const stream = ytdl(videoUrl, { quality: 'highestvideo' });
 
-    if (!format) {
-        return ctx.reply('Invalid selection. Please try again.');
-    }
-
-    const outputPath = path.join(tempDir, `output.${format.container}`);
-    const stream = ytdl(ctx.session.url, { format });
-
-    ctx.reply('Downloading...');
-    stream.pipe(fs.createWriteStream(outputPath));
-
-    stream.on('finish', async () => {
-        await ctx.replyWithDocument({ source: outputPath });
-        fs.unlinkSync(outputPath);
-    });
-
-    stream.on('error', (err) => {
+    ffmpeg(stream)
+      .output(outputPath)
+      .on('end', () => {
+        ctx.replyWithVideo({ source: outputPath }).then(() => {
+          fs.unlinkSync(outputPath); // Clean up
+        });
+      })
+      .on('error', (err) => {
         console.error(err);
-        ctx.reply('An error occurred while downloading. Please try again.');
-    });
+        ctx.reply('An error occurred during processing. Please try again later.');
+      })
+      .run();
+  } catch (error) {
+    console.error('Error fetching video info:', error.message);
+    ctx.reply('Failed to process the video. Please try again later.');
+  }
 });
 
 bot.launch();
-
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+console.log('Bot is running...');
