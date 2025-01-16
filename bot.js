@@ -1,7 +1,6 @@
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
-const ytdl = require('ytdl-core');
-const ffmpeg = require('fluent-ffmpeg');
+const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -37,28 +36,29 @@ bot.on('text', async (ctx) => {
   }
 
   try {
-    const info = await ytdl.getInfo(videoUrl);
-    const formats = ytdl.filterFormats(info.formats, 'audioandvideo');
-    const videoTitle = info.videoDetails.title.replace(/[^\w\s]/gi, '');
+    // Fetch video info using yt-dlp
+    const downloadCommand = `yt-dlp -f bestvideo+bestaudio --merge-output-format mp4 -o "${path.resolve(__dirname, '%(title)s.%(ext)s')}" ${videoUrl}`;
 
-    // Provide format options to user
-    ctx.reply(`Downloading "${videoTitle}". Please wait...`);
+    exec(downloadCommand, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`exec error: ${error}`);
+        return ctx.reply('Failed to download the video. Please try again later.');
+      }
 
-    const outputPath = path.resolve(__dirname, `${videoTitle}.mp4`);
-    const stream = ytdl(videoUrl, { quality: 'highestvideo' });
+      console.log(`stdout: ${stdout}`);
+      console.error(`stderr: ${stderr}`);
 
-    ffmpeg(stream)
-      .output(outputPath)
-      .on('end', () => {
-        ctx.replyWithVideo({ source: outputPath }).then(() => {
-          fs.unlinkSync(outputPath); // Clean up
-        });
-      })
-      .on('error', (err) => {
-        console.error(err);
-        ctx.reply('An error occurred during processing. Please try again later.');
-      })
-      .run();
+      const videoFilePath = path.resolve(__dirname, `${stdout.trim()}`);
+
+      // Send the downloaded video to the user
+      ctx.replyWithVideo({ source: videoFilePath }).then(() => {
+        // Clean up the file after sending it
+        fs.unlinkSync(videoFilePath);
+      }).catch((err) => {
+        console.error('Error sending video:', err);
+        ctx.reply('Failed to send the video. Please try again later.');
+      });
+    });
   } catch (error) {
     console.error('Error fetching video info:', error.message);
     ctx.reply('Failed to process the video. Please try again later.');
